@@ -192,6 +192,11 @@ def play_current_text():
     
     def play_thread():
         try:
+            # wav 폴더 생성
+            wav_dir = './wav'
+            if not os.path.exists(wav_dir):
+                os.makedirs(wav_dir)
+            
             # 언어 감지
             detected_lang = detect_language(text)
             lang_names = {'ko': '한국어', 'ja': '일본어', 'en': '영어'}
@@ -208,9 +213,30 @@ def play_current_text():
                     asyncio.set_event_loop(loop)
                     result = loop.run_until_complete(util_voicevox.voicevox_tts(text))
                     loop.close()
-                    
-                    update_status(f"VOICEVOX 재생 완료: {result}")
-                    log_request(text, detected_lang, "VOICEVOX 재생 성공")
+                    try:
+                        # wav 폴더에 저장
+                        timestamp = datetime.now().strftime("%y%m%d%H%M")
+                        # 파일명에 사용할 수 없는 문자 제거/변환
+                        safe_text = re.sub(r'[<>:"/\\|?*]', '_', text)
+                        safe_text = safe_text.replace('\n', '_').replace('\r', '_').replace('\t', '_')
+                        # 길이 제한 (너무 긴 파일명 방지)
+                        if len(safe_text) > 50:
+                            safe_text = safe_text[:50]
+                        wav_filename = f"{timestamp}-{safe_text}.wav"
+                        wav_path = os.path.join(wav_dir, wav_filename)
+                        
+                        # 파일이 이미 존재하면 덮어쓰기
+                        if os.path.exists(wav_path):
+                            os.remove(wav_path)
+                        
+                        # 파일 복사
+                        import shutil
+                        shutil.copy2(result, wav_path)
+                        
+                        update_status(f"VOICEVOX 재생 완료 및 저장: {wav_path}")
+                        log_request(text, detected_lang, f"VOICEVOX 재생 성공 및 저장: {wav_path}")
+                    except:
+                        print('./wav에 재생파일 저장 실패')
                     play_audio_file(result, auto_cleanup=True)
                     return
                     
@@ -221,8 +247,31 @@ def play_current_text():
             
             # 일본어가 아니거나 VOICEVOX 실패 시 gTTS 시도
             result = util_gtts.gtts_tts(text, lang='auto')
-            update_status(f"gTTS 재생 완료: {result}")
-            log_request(text, detected_lang, "gTTS 재생 성공")
+            
+            try:
+                # wav 폴더에 저장 (gTTS는 mp3이므로 mp3로 저장)
+                timestamp = datetime.now().strftime("%y%m%d%H%M")
+                # 파일명에 사용할 수 없는 문자 제거/변환
+                safe_text = re.sub(r'[<>:"/\\|?*]', '_', text)
+                safe_text = safe_text.replace('\n', '_').replace('\r', '_').replace('\t', '_')
+                # 길이 제한 (너무 긴 파일명 방지)
+                if len(safe_text) > 50:
+                    safe_text = safe_text[:50]
+                mp3_filename = f"{timestamp}-{safe_text}.mp3"
+                mp3_path = os.path.join(wav_dir, mp3_filename)
+                
+                # 파일이 이미 존재하면 덮어쓰기
+                if os.path.exists(mp3_path):
+                    os.remove(mp3_path)
+                
+                # mp3 파일을 그대로 복사하여 저장
+                import shutil
+                shutil.copy2(result, mp3_path)
+                update_status(f"gTTS 재생 완료 및 저장: {mp3_path}")
+                log_request(text, detected_lang, f"gTTS 재생 성공 및 저장: {mp3_path}")
+            except:
+                print('./wav에 mp3파일 저장 실패')
+            
             play_audio_file(result, auto_cleanup=True)
                 
         except Exception as e:
