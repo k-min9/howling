@@ -18,13 +18,16 @@
 
     # 설치
     pip install gTTS
+    pip install pyinstaller
+    pip install voicevox-client
+
     pip install requests
     pip install Flask
-    pip install pyinstaller
+    pip install waitress  # WSGI for production
 
     ```
 
 ## 빌드
 
 - pyinstaller 빌드 후 용량 약 9GB
-- pyinstaller --onedir server_interface.py -n howling --contents-directory=files_howling --noconfirm
+- pyinstaller --onedir server_interface.py -n howling_server --contents-directory=files_howling --noconfirm  # Flask 버전
