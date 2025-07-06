@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.*
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audio output
+output.wav
+output.mp3
+
+# PyInstaller build files
+build/
+dist/
+*.spec
+
+# Logs
+*.log
+
+# Local
+voicevox_engine/
+/venv
+/output
+/__pycache__
+*/__pycache__
+*/build
+/model
+/image
+/submodules
+/config
+/memory
+/dist
+/build
+/legacy
+/archive
+/files
+/pretrained_models
+/assets
+/animation
+/log
+/deeplX
+/vvclient
+/test
+/audio
+/docs
+
+*.pth
+*.gguf
+*.onnx
+*.spec
+*.log
+*.ckpt
+*.exe
+*.wav
+*.txt
+*.pyc
+*.ico
+*.flac
+
+output*.wav
+temp*.py
+temp.json
+tempCodeRunnerFile.py
+snipet.py
