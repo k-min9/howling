@@ -20,6 +20,7 @@
     pip install gTTS
     pip install pyinstaller
     pip install voicevox-client
+    pip install pygame
 
     pip install requests
     pip install Flask
@@ -29,5 +30,5 @@
 
 ## 빌드
 
-- pyinstaller 빌드 후 용량 약 9GB
+- pyinstaller 빌드
 - pyinstaller --onedir server_interface.py -n howling_server --contents-directory=files_howling --noconfirm  # Flask 버전

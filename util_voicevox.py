@@ -1,16 +1,16 @@
-try:
-    from vvclient import Client
-except:
-    # product 단계에서는 없어도 지장 없음
-    pass
-
+from voicevox import Client
 import asyncio
 
 async def voicevox_tts(text):
+    import time
     async with Client() as client:
         audio_query = await client.create_audio_query(text , speaker=1)
-        with open("voice.wav", "wb") as f:
+        # 타임스탬프를 이용해 매번 다른 파일명 생성
+        timestamp = str(int(time.time() * 1000))
+        output_file = f"voice_{timestamp}.wav"
+        with open(output_file, "wb") as f:
             f.write(await audio_query.synthesis(speaker=1))
+        return output_file
 
 
 if __name__ == "__main__":
