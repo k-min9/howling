@@ -26,7 +26,8 @@ dist/
 *.log
 
 # Local
-voicevox_engine/
+/voice
+/voicevox_engine
 /venv
 /output
 /__pycache__

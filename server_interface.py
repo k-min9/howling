@@ -8,6 +8,7 @@ import os
 import threading
 import asyncio
 import pygame
+from datetime import datetime
 
 # Server-Flask
 from flask import Flask, Response, request, jsonify, send_file, abort
@@ -15,6 +16,7 @@ from waitress import serve
 
 # Local
 import util_voicevox
+import util_gtts
 
 app = Flask(__name__)
 
@@ -27,6 +29,10 @@ status_label = None
 btn_start = None
 btn_stop = None
 btn_test = None
+flask_status_label = None
+voicevox_status_label = None
+text_display = None
+log_file_path = None
 
 # 필요언어 체크
 '''
@@ -50,8 +56,12 @@ def detect_language(text):
 # 한국어 텍스트를 입력받아 변환
 @app.route('/howling', methods=['POST'])
 def synthesize_sound():
+    if not request.json:
+        return jsonify({"error": "JSON 데이터가 없습니다"})
+    
     text = request.json.get('text', '안녕하십니까.')
     lang = request.json.get('lang', '')
+    is_play = request.json.get('is_play', '')
     # speed = request.json.get('speed', 100)  # % 50~100
     # speed = float(speed)/100 
     
@@ -61,23 +71,58 @@ def synthesize_sound():
         lang = detect_language(text)
     if lang not in ['ja', 'ko', 'en']:
         lang = 'en'
+    
+    # GUI 텍스트 업데이트
+    if text_display:
+        text_display.delete(1.0, tk.END)
+        text_display.insert(1.0, text)
+    
+    # 로그 기록
+    log_request(text, lang, "API 요청")
         
     # 일본어면 1순위로 voicevox 시도
-    try:
-        # 비동기 함수를 동기적으로 실행
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(util_voicevox.voicevox_tts(text))
-        loop.close()
-        
-        if os.path.exists(result):
-            response = send_file(result, mimetype="audio/wav")
-            return response
-    except:
-        pass
+    if lang == 'ja':
+        try:
+            # 비동기 함수를 동기적으로 실행
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(util_voicevox.voicevox_tts(text))
+            loop.close()
+            
+            if os.path.exists(result):
+                log_request(text, lang, "VOICEVOX 성공")
+                
+                # is_play가 'true'이면 pygame으로 재생
+                if is_play == 'true':
+                    play_audio_file(result, auto_cleanup=True)
+                
+                response = send_file(result, mimetype="audio/wav")
+                return response
+        except Exception as e:
+            print(f"VOICEVOX 실패: {e}")
+            log_request(text, lang, f"VOICEVOX 실패: {e}")
+            pass
     
-    # return 되지 않았다면 언어필요없이 gtts로 반환
-    return jsonify({"error": "TTS 실행 실패"})
+    # 일본어가 아니거나 VOICEVOX 실패 시 gTTS로 대체
+    try:
+        result = util_gtts.gtts_tts(text, lang)
+        if os.path.exists(result):
+            log_request(text, lang, "gTTS 성공")
+            
+            # is_play가 'true'이면 pygame으로 재생
+            if is_play == 'true':
+                play_audio_file(result, auto_cleanup=True)
+            
+            response = send_file(result, mimetype="audio/mpeg")
+            return response
+    except Exception as e:
+        print(f"gTTS 실패: {e}")
+        log_request(text, lang, f"gTTS 실패: {e}")
+        return jsonify({"error": f"TTS 실행 실패: {str(e)}"})
+    
+    # 모든 TTS 실패
+    log_request(text, lang, "모든 TTS 엔진 실패")
+    return jsonify({"error": "모든 TTS 엔진 실행 실패"})
     
 # VOICEVOX Engine 실행 확인 함수
 def is_voicevox_running():
@@ -107,6 +152,87 @@ def update_status(message):
     if status_label:
         status_label.config(text=message)
         status_label.update()
+
+def update_flask_status(is_running):
+    """Flask 서버 상태 업데이트"""
+    if flask_status_label:
+        color = "green" if is_running else "red"
+        flask_status_label.config(bg=color)
+
+def update_voicevox_status(is_running):
+    """VOICEVOX 엔진 상태 업데이트"""
+    if voicevox_status_label:
+        color = "green" if is_running else "red"
+        voicevox_status_label.config(bg=color)
+
+def log_request(text, lang, result):
+    """요청 로그 기록"""
+    if log_file_path:
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            lang_names = {'ko': '한국어', 'ja': '일본어', 'en': '영어'}
+            lang_name = lang_names.get(lang, lang)
+            
+            with open(log_file_path, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] 텍스트: {text}\n")
+                f.write(f"        판정언어: {lang_name} ({lang})\n")
+                f.write(f"        결과: {result}\n")
+                f.write("-" * 50 + "\n")
+        except Exception as e:
+            print(f"로그 기록 실패: {e}")
+
+def play_current_text():
+    """현재 텍스트 재생"""
+    if not text_display:
+        return
+    
+    text = text_display.get(1.0, tk.END).strip()
+    if not text:
+        return  # 텍스트가 비어있으면 아무 작업 안함
+    
+    def play_thread():
+        try:
+            # 언어 감지
+            detected_lang = detect_language(text)
+            lang_names = {'ko': '한국어', 'ja': '일본어', 'en': '영어'}
+            lang_name = lang_names.get(detected_lang, detected_lang)
+            update_status(f"언어 감지: {lang_name} ({detected_lang}) - 재생: {text}")
+            
+            # 로그 기록
+            log_request(text, detected_lang, "GUI 재생 요청")
+            
+            # 일본어면 VOICEVOX 시도
+            if detected_lang == 'ja':
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    result = loop.run_until_complete(util_voicevox.voicevox_tts(text))
+                    loop.close()
+                    
+                    update_status(f"VOICEVOX 재생 완료: {result}")
+                    log_request(text, detected_lang, "VOICEVOX 재생 성공")
+                    play_audio_file(result, auto_cleanup=True)
+                    return
+                    
+                except Exception as e:
+                    update_status(f"VOICEVOX 실패, gTTS로 시도 중...")
+                    log_request(text, detected_lang, f"VOICEVOX 재생 실패: {e}")
+                    print(f"VOICEVOX 실패: {e}")
+            
+            # 일본어가 아니거나 VOICEVOX 실패 시 gTTS 시도
+            result = util_gtts.gtts_tts(text, lang='auto')
+            update_status(f"gTTS 재생 완료: {result}")
+            log_request(text, detected_lang, "gTTS 재생 성공")
+            play_audio_file(result, auto_cleanup=True)
+                
+        except Exception as e:
+            update_status(f"재생 실패: {str(e)}")
+            log_request(text, detected_lang, f"재생 실패: {e}")
+    
+    # 별도 스레드에서 작업 실행
+    thread = threading.Thread(target=play_thread)
+    thread.daemon = True
+    thread.start()
 
 # 오디오 재생 함수
 def play_audio_file(file_path, auto_cleanup=True):
@@ -173,7 +299,10 @@ def server_start_thread():
     update_status("서버 구동 시작...")
     
     # 기존 서버 체크
-    if is_voicevox_running():
+    voicevox_running = is_voicevox_running()
+    update_voicevox_status(voicevox_running)
+    
+    if voicevox_running:
         update_status("기존 VOICEVOX Engine 감지됨")
     else:
         update_status("VOICEVOX Engine 시작 중...")
@@ -263,33 +392,48 @@ def open_test_modal():
         text_entry.insert(1.0, "こんにちは")
     
     def run_test():
-        """테스트 실행"""
+        """테스트 실행 - 1순위 VOICEVOX, 실패시 2순위 gTTS"""
         text = text_entry.get(1.0, tk.END).strip()
         if not text:
             tkinter.messagebox.showwarning("경고", "텍스트를 입력해주세요.")
             return
         
-        def run_async_test():
-            """비동기 테스트 실행을 별도 스레드에서 처리"""
+        def run_test_thread():
+            """테스트 실행을 별도 스레드에서 처리"""
             try:
-                update_status(f"TTS 테스트 실행: {text}")
-                # 새로운 이벤트 루프 생성
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                result = loop.run_until_complete(util_voicevox.voicevox_tts(text))
-                loop.close()
+                # 언어 감지
+                detected_lang = detect_language(text)
+                lang_names = {'ko': '한국어', 'ja': '일본어', 'en': '영어'}
+                lang_name = lang_names.get(detected_lang, detected_lang)
+                update_status(f"언어 감지: {lang_name} ({detected_lang}) - TTS 테스트 실행: {text}")
                 
-                update_status(f"TTS 테스트 완료: {result}")
+                # 일본어면 VOICEVOX 시도
+                if detected_lang == 'ja':
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        result = loop.run_until_complete(util_voicevox.voicevox_tts(text))
+                        loop.close()
+                        
+                        update_status(f"VOICEVOX 테스트 완료: {result}")
+                        play_audio_file(result, auto_cleanup=True)
+                        return
+                        
+                    except Exception as e:
+                        update_status(f"VOICEVOX 실패, gTTS로 시도 중...")
+                        print(f"VOICEVOX 실패: {e}")
                 
-                # 생성된 오디오 파일 재생 (자동 정리 활성화)
+                # 일본어가 아니거나 VOICEVOX 실패 시 gTTS 시도
+                result = util_gtts.gtts_tts(text, lang='auto')
+                update_status(f"gTTS 테스트 완료: {result}")
                 play_audio_file(result, auto_cleanup=True)
                     
             except Exception as e:
-                update_status(f"TTS 테스트 실패: {str(e)}")
+                update_status(f"모든 TTS 테스트 실패: {str(e)}")
                 tkinter.messagebox.showerror("오류", f"TTS 테스트 실패:\n{str(e)}")
         
-        # 별도 스레드에서 비동기 작업 실행
-        thread = threading.Thread(target=run_async_test)
+        # 별도 스레드에서 작업 실행
+        thread = threading.Thread(target=run_test_thread)
         thread.daemon = True
         thread.start()
     
@@ -316,6 +460,24 @@ def open_test_modal():
 # 향후 구현 예정
 
 def server_start():
+    # 로그 파일 초기화
+    global log_file_path
+    if not os.path.exists('./log'):
+        os.makedirs('./log')
+    
+    # voice 폴더 초기화
+    if not os.path.exists('./voice'):
+        os.makedirs('./voice')
+    
+    timestamp = datetime.now().strftime("%y%m%d%H%M")
+    log_file_path = f'./log/{timestamp}.txt'
+    
+    # 로그 파일 헤더 작성
+    with open(log_file_path, 'w', encoding='utf-8') as f:
+        f.write(f"=== Howling TTS 서버 로그 ===\n")
+        f.write(f"서버 시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("=" * 50 + "\n\n")
+    
     # VOICEVOX Engine 실행 확인 및 실행
     voice_vox_engine_path = './voicevox_engine/windows-cpu/run.exe'
     
@@ -328,17 +490,22 @@ def server_start():
             # 서버 시작 대기
             if wait_for_voicevox():
                 update_status("VOICEVOX Engine 구동 완료")
+                update_voicevox_status(True)
             else:
                 update_status("VOICEVOX Engine 구동 실패")
+                update_voicevox_status(False)
         else:
             print(f'VOICEVOX Engine 파일을 찾을 수 없습니다: {voice_vox_engine_path}')
             update_status("VOICEVOX Engine 파일 없음")
+            update_voicevox_status(False)
     else:
         print('VOICEVOX Engine이 이미 실행 중입니다.')
+        update_voicevox_status(True)
     
     # main 서버 시작
     print('Server Start')
     update_status("Flask 서버 시작 중...")
+    update_flask_status(True)
     serve(app, host="0.0.0.0", port=5050)  # 5000 아님 주의!
     
     
@@ -364,12 +531,26 @@ if __name__ == '__main__':
     btn_test = tk.Button(btn_frame, text="테스트", command=test, width=10, state='disabled')
     btn_test.grid(row=0, column=3, padx=5, pady=5)
     
-    # 현재 상태 - 작업중, 작업완료, 서버 시작 등의 안내문 표시
-    status_frame = tk.Frame(root)
-    status_frame.grid(row=1, column=0, padx=10, pady=10, columnspan=2, sticky='w')
+    # 서버 상태 표시 Frame
+    server_status_frame = tk.Frame(root)
+    server_status_frame.grid(row=1, column=0, padx=10, pady=10, columnspan=2, sticky='w')
     
-    tk.Label(status_frame, text="현재 상태:").grid(row=0, column=0, sticky='w')
-    status_label = tk.Label(status_frame, text="대기 중", bg="lightgray", width=50)
+    # Flask 상태
+    tk.Label(server_status_frame, text="Flask").grid(row=0, column=0, padx=5, sticky='w')
+    flask_status_label = tk.Label(server_status_frame, text="  ", bg="red", width=3)
+    flask_status_label.grid(row=0, column=1, padx=5)
+    
+    # VOICEVOX 상태
+    tk.Label(server_status_frame, text="VOICEVOX").grid(row=0, column=2, padx=5, sticky='w')
+    voicevox_status_label = tk.Label(server_status_frame, text="  ", bg="red", width=3)
+    voicevox_status_label.grid(row=0, column=3, padx=5)
+    
+    # Info 상태 - 작업중, 작업완료, 서버 시작 등의 안내문 표시
+    info_frame = tk.Frame(root)
+    info_frame.grid(row=2, column=0, padx=10, pady=10, columnspan=2, sticky='w')
+    
+    tk.Label(info_frame, text="Info:").grid(row=0, column=0, sticky='w')
+    status_label = tk.Label(info_frame, text="대기 중", bg="lightgray", width=50)
     status_label.grid(row=0, column=1, padx=5, sticky='w')
     
     # 전역 변수에 위젯들 할당 (전역 변수 선언 필요)
@@ -377,13 +558,27 @@ if __name__ == '__main__':
     globals()['btn_stop'] = btn_stop  
     globals()['btn_test'] = btn_test
     globals()['status_label'] = status_label
+    globals()['flask_status_label'] = flask_status_label
+    globals()['voicevox_status_label'] = voicevox_status_label
+    globals()['text_display'] = text_display
+    
+    # 초기 상태 설정
+    update_flask_status(False)  # Flask 서버는 시작되지 않음
+    update_voicevox_status(is_voicevox_running())  # VOICEVOX 상태 체크
     
     # 텍스트 프레임 - 입력된 텍스트 보여주기
     text_frame = tk.Frame(root)
-    text_frame.grid(row=2, column=0, padx=10, pady=10, columnspan=2, sticky='w')
+    text_frame.grid(row=3, column=0, padx=10, pady=10, columnspan=2, sticky='w')
     
-    tk.Label(text_frame, text="입력 텍스트:").grid(row=0, column=0, sticky='w')
+    tk.Label(text_frame, text="텍스트:").grid(row=0, column=0, sticky='w')
     text_display = tk.Text(text_frame, height=10, width=70)
-    text_display.grid(row=1, column=0, padx=5, pady=5)
+    text_display.grid(row=1, column=0, padx=5, pady=5, sticky='ew')
+    
+    # 재생 버튼 프레임 (하단 우측 정렬)
+    play_frame = tk.Frame(text_frame)
+    play_frame.grid(row=2, column=0, padx=5, pady=5, sticky='e')
+    
+    btn_play = tk.Button(play_frame, text="재생", command=play_current_text, width=10, height=2)
+    btn_play.pack(side=tk.RIGHT)
     
     root.mainloop()
